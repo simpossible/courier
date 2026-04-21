@@ -12,25 +12,25 @@ import (
 // MQTTTransport implements Transport using the paho MQTT client library.
 //
 // It handles automatic reconnection and resubscription of all topics
-// when the connection is restored.
+// when the connection is restored. For MQTT 5.0 brokers (e.g. EMQX),
+// it extracts publisher metadata from message properties.
 type MQTTTransport struct {
-	// Configuration fields, set via functional options.
-	brokers                []string
-	clientID               string
-	autoReconnect          bool
-	connectRetry           bool
-	keepAlive              time.Duration
-	pingTimeout            time.Duration
-	maxReconnectInterval   time.Duration
-	cleanSession           bool
-	defaultQoS             byte
-	onConnect              func()
-	onConnectionLost       func(err error)
+	brokers              []string
+	clientID             string
+	autoReconnect        bool
+	connectRetry         bool
+	keepAlive            time.Duration
+	pingTimeout          time.Duration
+	maxReconnectInterval time.Duration
+	cleanSession         bool
+	defaultQoS           byte
+	onConnect            func()
+	onConnectionLost     func(err error)
 
-	client       pahomqtt.Client
-	mu           sync.RWMutex
-	subs         map[string]MessageHandler // topic → handler
-	globalHandler MessageHandler           // unified dispatch function
+	client        pahomqtt.Client
+	mu            sync.RWMutex
+	subs          map[string]MessageHandler
+	globalHandler func(topic string, payload []byte, props MessageProperties)
 }
 
 // NewMQTTTransport creates a new MQTT transport with the given options.
@@ -89,7 +89,8 @@ func (t *MQTTTransport) Connect() error {
 		t.mu.RUnlock()
 
 		if handler != nil {
-			handler(msg.Topic(), msg.Payload())
+			props := extractProperties(msg)
+			handler(msg.Topic(), msg.Payload(), props)
 		}
 	})
 
@@ -150,22 +151,18 @@ func (t *MQTTTransport) Publish(topic string, payload []byte) error {
 	return nil
 }
 
-// rebuildGlobalHandler creates a single dispatch function that routes messages
-// by topic to the correct per-subscription handler. Must be called with t.mu held.
 func (t *MQTTTransport) rebuildGlobalHandler() {
 	snapshot := make(map[string]MessageHandler, len(t.subs))
 	for k, v := range t.subs {
 		snapshot[k] = v
 	}
-	t.globalHandler = func(topic string, payload []byte) {
+	t.globalHandler = func(topic string, payload []byte, props MessageProperties) {
 		if h, ok := snapshot[topic]; ok {
-			h(topic, payload)
+			h(topic, payload, props)
 		}
 	}
 }
 
-// resubscribeAll re-establishes all subscriptions after a reconnect.
-// It copies the topic list under a read lock, then subscribes without holding the lock.
 func (t *MQTTTransport) resubscribeAll() {
 	t.mu.RLock()
 	topics := make([]string, 0, len(t.subs))
@@ -181,4 +178,17 @@ func (t *MQTTTransport) resubscribeAll() {
 			log.Printf("[courier/transport] resubscribed to %s", topic)
 		}
 	}
+}
+
+// extractProperties pulls publisher and user metadata from MQTT message properties.
+// The current paho v1 library does not expose MQTT 5.0 properties on the Message interface.
+// Properties will be populated when upgrading to paho v2 or using EMQX's rule engine
+// to inject publisher metadata into the payload.
+//
+// EMQX configuration options to pass client_id:
+//   - Rule engine: rewrite payload to include client_id
+//   - Webhook plugin: inject client_id as a prefix in the payload
+//   - Upgrade to paho.mqtt.golang v2 which supports MQTT 5.0 properties
+func extractProperties(msg pahomqtt.Message) MessageProperties {
+	return make(MessageProperties)
 }

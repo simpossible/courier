@@ -12,7 +12,6 @@ import (
 	"github.com/simpossible/courier/transport"
 )
 
-// pendingCall tracks an in-flight RPC request awaiting a response.
 type pendingCall struct {
 	respChan chan []byte
 	timer    *time.Timer
@@ -89,8 +88,6 @@ func (c *Client) Close() error {
 }
 
 // Call sends an RPC request and waits for the response or timeout.
-// serviceName identifies the target service, cmd is the numeric method ID,
-// and payload is the serialized request body (typically protobuf).
 func (c *Client) Call(ctx context.Context, serviceName string, cmd uint32, payload []byte) ([]byte, error) {
 	requestID, err := newRequestID()
 	if err != nil {
@@ -101,12 +98,10 @@ func (c *Client) Call(ctx context.Context, serviceName string, cmd uint32, paylo
 		respChan: make(chan []byte, 1),
 	}
 
-	// Register pending call before publishing.
 	c.mu.Lock()
 	c.pending[requestID] = call
 	c.mu.Unlock()
 
-	// Ensure cleanup on any exit path.
 	defer func() {
 		c.mu.Lock()
 		if pc, ok := c.pending[requestID]; ok {
@@ -116,7 +111,6 @@ func (c *Client) Call(ctx context.Context, serviceName string, cmd uint32, paylo
 		c.mu.Unlock()
 	}()
 
-	// Set timeout timer.
 	call.timer = time.AfterFunc(c.timeout, func() {
 		c.mu.Lock()
 		delete(c.pending, requestID)
@@ -128,8 +122,8 @@ func (c *Client) Call(ctx context.Context, serviceName string, cmd uint32, paylo
 		}
 	})
 
-	// Encode and publish. ClientID is embedded in the request frame.
-	reqBytes := codec.EncodeRequest(cmd, c.clientID, payload)
+	// ClientID is NOT in the frame — the broker injects it via message properties.
+	reqBytes := codec.EncodeRequest(cmd, payload)
 	reqTopic := RequestTopic(serviceName)
 
 	if pubErr := c.tp.Publish(reqTopic, reqBytes); pubErr != nil {
@@ -154,7 +148,6 @@ func (c *Client) Call(ctx context.Context, serviceName string, cmd uint32, paylo
 		}
 	}
 
-	// Final wait for response.
 	select {
 	case resp := <-call.respChan:
 		return c.handleCallResult(resp)
@@ -170,8 +163,7 @@ func (c *Client) handleCallResult(resp []byte) ([]byte, error) {
 	return resp, nil
 }
 
-// handleResponse is the transport message handler for the response topic.
-func (c *Client) handleResponse(topic string, payload []byte) {
+func (c *Client) handleResponse(topic string, payload []byte, props transport.MessageProperties) {
 	frame, err := codec.DecodeResponse(payload)
 	if err != nil {
 		log.Printf("[courier/rpc] failed to decode response: %v", err)

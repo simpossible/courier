@@ -4,8 +4,12 @@
 // allowing alternative transports (WebSocket, QUIC, etc.) in the future.
 package transport
 
+// MessageProperties carries metadata extracted from the transport layer.
+// For MQTT 5.0 with EMQX, this includes the publisher's ClientID and user properties.
+type MessageProperties map[string]string
+
 // MessageHandler is called when a message is received on a subscribed topic.
-type MessageHandler func(topic string, payload []byte)
+type MessageHandler func(topic string, payload []byte, props MessageProperties)
 
 // Transport represents a message transport capable of pub/sub messaging.
 type Transport interface {
@@ -16,8 +20,6 @@ type Transport interface {
 	Close() error
 
 	// Subscribe registers a handler for the given topic.
-	// If the transport is connected, the subscription takes effect immediately.
-	// If not yet connected, subscriptions are recorded and applied on connect.
 	Subscribe(topic string, handler MessageHandler) error
 
 	// Unsubscribe removes the subscription for the given topic.

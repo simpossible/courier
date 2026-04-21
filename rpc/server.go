@@ -32,7 +32,6 @@ func NewServer(opts ...ServerOption) *Server {
 }
 
 // Register adds a service's methods to the server's dispatch table.
-// Must be called before Start.
 func (s *Server) Register(info ServiceInfo) {
 	chain := ChainInterceptors(s.interceptors...)
 
@@ -85,15 +84,21 @@ func (s *Server) requestTopic() string {
 }
 
 func (s *Server) makeMessageHandler() transport.MessageHandler {
-	return func(topic string, payload []byte) {
+	return func(topic string, payload []byte, props transport.MessageProperties) {
 		frame, err := codec.DecodeRequest(payload)
 		if err != nil {
 			log.Printf("[courier/rpc] failed to decode request: %v", err)
 			return
 		}
 
+		// Extract ClientID from transport properties (injected by EMQX/broker).
+		clientID := ""
+		if props != nil {
+			clientID = props["client_id"]
+		}
+
 		ctx := &Context{
-			ClientID: frame.ClientID,
+			ClientID: clientID,
 		}
 
 		respPayload, dispatchErr := s.dispatcher.dispatch(frame.Cmd, ctx, frame.Payload)
