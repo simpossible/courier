@@ -1,0 +1,118 @@
+# 架构设计
+
+## 分层架构
+
+Courier 分为三层，每层职责单一、可独立替换：
+
+```
+┌─────────────────────────────────────────┐
+│            Application Code             │
+├─────────────────────────────────────────┤
+│  rpc/   │  Server, Client, Interceptor  │  ← RPC 核心
+├─────────┤───────────────────────────────┤
+│ transport/ │  Transport 接口 + MQTT 实现 │  ← 传输层
+├───────────┤─────────────────────────────┤
+│   codec/  │  Request / Response 编解码   │  ← 协议层
+└───────────┴─────────────────────────────┘
+```
+
+| 层 | 包 | 职责 |
+|---|---|---|
+| 协议层 | `codec/` | 二进制帧的编码/解码，零外部依赖 |
+| 传输层 | `transport/` | MQTT 连接管理、断线重连、自动重订阅 |
+| RPC 层 | `rpc/` | 服务注册、命令路由、请求-响应匹配、拦截器 |
+
+## 二进制协议
+
+### Request Frame
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                        Length (4B, BE)                        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|     Version (2B, BE)  |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                          Cmd (4B, BE)                         |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         Payload (...B)                        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+
+- **Length** (uint32, BigEndian): 整帧长度 = 10 + len(Payload)
+- **Version** (uint16, BigEndian): 协议版本，当前为 1
+- **Cmd** (uint32, BigEndian): 命令号，用于路由到对应的处理函数
+- **Payload**: Protobuf 序列化的请求体
+
+### Response Frame
+
+```
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                        Length (4B, BE)                        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |
++                       RequestID (16B)                         +
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         Payload (...B)                        |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+```
+
+- **Length** (uint32, BigEndian): 整帧长度 = 20 + len(Payload)
+- **RequestID** (16B): 来自请求的唯一标识，用于匹配请求和响应
+- **Payload**: Protobuf 序列化的响应体
+
+## 请求-响应流程
+
+```
+Client                                 Server
+  │                                      │
+  │  1. Generate RequestID (UUID)        │
+  │  2. Encode Request Frame             │
+  │  3. Store in pending map             │
+  │  4. Set timeout timer                │
+  │                                      │
+  │──── Publish to mrpc/request/{svc} ──►│
+  │                                      │  5. Decode Request Frame
+  │                                      │  6. Dispatch by Cmd
+  │                                      │  7. Run interceptor chain
+  │                                      │  8. Call HandlerFunc
+  │                                      │  9. Encode Response Frame
+  │                                      │
+  │◄── Publish to mrpc/response/{id} ────│
+  │                                      │
+  │  10. Match RequestID in pending      │
+  │  11. Stop timer, return response     │
+  │                                      │
+```
+
+如果 timer 先于响应触发（超时），Client 返回 `ErrTimeout` 并从 pending map 中移除条目。
+如果配置了重试，Client 在等待期间按 backoff 间隔重新发布请求。
+
+## 共享订阅
+
+多个 Server 实例通过 `$share` 订阅同一 topic：
+
+```
+Server A 订阅: $share/RegisterService/mrpc/request/RegisterService
+Server B 讂阅: $share/RegisterService/mrpc/request/RegisterService
+Server C 订阅: $share/RegisterService/mrpc/request/RegisterService
+```
+
+Broker 收到请求后只投递给其中一个实例（round-robin 或随机），天然的负载均衡。
+新实例上线自动加入分发，下线自动移除，无需额外服务注册。
+
+## 断线重连
+
+`transport.MQTTTransport` 内置了完整的重连机制：
+
+1. **断线时** — `ConnectionLostHandler` 仅打日志，不做清理
+2. **重连成功时** — `OnConnectHandler` 触发 `resubscribeAll()`：
+   - RLock 拷贝订阅表
+   - 解锁后逐个重新订阅（包括 `$share` topic）
+3. **客户端 pending** — 断线期间的 pending 请求：
+   - timer 超时 → 返回 `ErrTimeout`，清理 pending
+   - 重连成功 → response topic 已重订阅，响应正常匹配

@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package courier;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/simpossible/courier/options";
+
+// Cmd is a method-level extension that assigns a numeric command ID
+// to an RPC method for binary protocol routing.
+extend google.protobuf.MethodOptions {
+  optional int32 cmd = 50001;
+}
