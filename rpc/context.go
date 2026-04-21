@@ -2,6 +2,9 @@ package rpc
 
 // Context carries request-scoped metadata through the RPC handler chain.
 type Context struct {
+	// Cmd is the numeric command ID of the current RPC method.
+	Cmd uint32
+
 	// RequestID is the unique identifier of the request, used to match responses.
 	RequestID [16]byte
 
@@ -16,6 +19,10 @@ type Context struct {
 
 	// Meta holds arbitrary key-value metadata that can be set by interceptors.
 	Meta map[string]string
+
+	// Session holds the authenticated session for this request, if any.
+	// Set by the session middleware after looking up the device's session.
+	Session *Session
 }
 
 // SetMeta stores a key-value pair in the context metadata.

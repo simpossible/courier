@@ -40,6 +40,7 @@ func (d *dispatcher) dispatch(cmd uint32, ctx *Context, payload []byte) ([]byte,
 		return nil, ErrNotImplemented
 	}
 
+	ctx.Cmd = cmd
 	ctx.ServiceName = entry.serviceName
 	ctx.MethodName = entry.methodName
 

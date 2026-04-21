@@ -46,6 +46,7 @@ Courier 选择 MQTT 作为传输层：
 - **客户端超时 + 重试** — pending map + 可配置退避策略，QoS 0 + 应用层可靠投递
 - **断线自动重连** — 自动重订阅所有 topic，包括 `$share` 共享订阅
 - **拦截器链** — 日志、认证、指标、panic 恢复，与 gRPC interceptor 用法一致
+- **Session 管理** — 服务端 session 替代 JWT，省带宽；支持内存和 Redis 存储
 - **不依赖插件** — 手写 `ServiceInfo` 也能注册，灵活选择
 
 ## 快速开始
@@ -188,6 +189,7 @@ srv.Register(courier.ServiceInfo{
 | [架构设计](doc/architecture.md) | 分层架构、协议格式、请求-响应流程 |
 | [配置参考](doc/configuration.md) | Server / Client / Transport 全部配置项 |
 | [拦截器](doc/interceptors.md) | 内置拦截器 + 自定义拦截器写法 |
+| [Session 管理](doc/session.md) | 服务端 Session、内存/Redis 存储、带宽对比 |
 | [共享订阅](doc/shared-subscription.md) | `$share` 机制、负载均衡、水平扩展 |
 | [Protoc 插件](doc/codegen.md) | 安装、使用、生成代码结构 |
 | [迁移指南](doc/migration.md) | 从旧版 Cipher 项目迁移 |
