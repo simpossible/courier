@@ -36,20 +36,16 @@ Courier 分为三层，每层职责单一、可独立替换：
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                          Cmd (4B, BE)                         |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-| ClientIDLen (2B, BE)  |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                     ClientID (...B)                           |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                         Payload (...B)                        |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
-- **Length** (uint32, BigEndian): 整帧长度 = 12 + len(ClientID) + len(Payload)
+- **Length** (uint32, BigEndian): 整帧长度 = 10 + len(Payload)
 - **Version** (uint16, BigEndian): 协议版本，当前为 1
 - **Cmd** (uint32, BigEndian): 命令号，用于路由到对应的处理函数
-- **ClientIDLen** (uint16, BigEndian): ClientID 的字节长度
-- **ClientID**: 客户端标识，必须与 MQTT 连接的 ClientID 一致
 - **Payload**: Protobuf 序列化的请求体
+
+> **ClientID 不在帧中传输。** 服务端通过 Broker（EMQX）注入的消息属性获取发布者的 ClientID，用于 session 查询和响应路由。
 
 ### Response Frame
 
@@ -77,21 +73,22 @@ Courier 分为三层，每层职责单一、可独立替换：
 Client                                 Server
   │                                      │
   │  1. Generate RequestID (UUID)        │
-  │  2. Encode Request Frame (cmd + clientID + payload)
+  │  2. Encode Request Frame (cmd + payload)
   │  3. Store in pending map             │
   │  4. Set timeout timer                │
   │                                      │
   │──── Publish to mrpc/request/{svc} ──►│
-  │                                      │  5. Decode Request Frame, extract ClientID
-  │                                      │  6. Dispatch by Cmd
-  │                                      │  7. SessionInterceptor: lookup session by ClientID
-  │                                      │  8. Call HandlerFunc
-  │                                      │  9. Encode Response Frame
+  │                                      │  5. Decode Request Frame
+  │                                      │  6. Extract ClientID from transport properties (EMQX)
+  │                                      │  7. Dispatch by Cmd
+  │                                      │  8. SessionInterceptor: lookup session by ClientID
+  │                                      │  9. Call HandlerFunc
+  │                                      │  10. Encode Response Frame
   │                                      │
   │◄── Publish to mrpc/response/{clientID}
   │                                      │
-  │  10. Match RequestID in pending      │
-  │  11. Stop timer, return response     │
+  │  11. Match RequestID in pending      │
+  │  12. Stop timer, return response     │
   │                                      │
 ```
 
