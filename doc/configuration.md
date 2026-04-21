@@ -55,7 +55,7 @@ srv := rpc.NewServer(
 ```go
 client := rpc.NewClient(
     rpc.WithClientTransport(tp),
-    rpc.WithDeviceID("device-abc123"),
+    rpc.WithClientID("device-abc123"),
     rpc.WithTimeout(10 * time.Second),
     rpc.WithRetry(3, 1*time.Second, 1.5),
 )
@@ -64,7 +64,7 @@ client := rpc.NewClient(
 | Option | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `WithClientTransport` | `Transport` | (必填) | 传输层实例 |
-| `WithDeviceID` | `string` | (必填) | 设备标识，决定响应 topic |
+| `WithClientID` | `string` | (必填) | 客户端标识，必须与 MQTT ClientID 一致，用于响应路由和 session |
 | `WithTimeout` | `time.Duration` | `10s` | 单次请求超时 |
 | `WithRetry` | `(int, Duration, float64)` | `0, 1s, 1.5` | 重试次数、初始间隔、退避因子 |
 | `WithClientInterceptors` | `...Interceptor` | `[]` | 客户端拦截器链 |

@@ -8,8 +8,10 @@ type Context struct {
 	// RequestID is the unique identifier of the request, used to match responses.
 	RequestID [16]byte
 
-	// DeviceID identifies the client device that sent the request.
-	DeviceID string
+	// ClientID identifies the MQTT client that sent the request.
+	// This comes from the request frame header and must match the MQTT connection ClientID.
+	// Used as the session key for authentication.
+	ClientID string
 
 	// ServiceName is the name of the service being called.
 	ServiceName string
@@ -21,7 +23,7 @@ type Context struct {
 	Meta map[string]string
 
 	// Session holds the authenticated session for this request, if any.
-	// Set by the session middleware after looking up the device's session.
+	// Set by the session middleware after looking up the client's session.
 	Session *Session
 }
 

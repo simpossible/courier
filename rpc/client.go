@@ -20,13 +20,13 @@ type pendingCall struct {
 
 // Client sends RPC requests over MQTT and matches responses to pending calls.
 type Client struct {
-	tp           transport.Transport
-	deviceID     string
-	timeout      time.Duration
-	retryCount   int
+	tp            transport.Transport
+	clientID      string
+	timeout       time.Duration
+	retryCount    int
 	retryInterval time.Duration
-	retryBackoff float64
-	interceptors []Interceptor
+	retryBackoff  float64
+	interceptors  []Interceptor
 
 	mu      sync.RWMutex
 	pending map[[16]byte]*pendingCall
@@ -52,11 +52,11 @@ func (c *Client) Connect() error {
 	if c.tp == nil {
 		return fmt.Errorf("courier/rpc: client has no transport")
 	}
-	if c.deviceID == "" {
-		return fmt.Errorf("courier/rpc: client has no device ID")
+	if c.clientID == "" {
+		return fmt.Errorf("courier/rpc: client has no client ID")
 	}
 
-	respTopic := ResponseTopic(c.deviceID)
+	respTopic := ResponseTopic(c.clientID)
 	if err := c.tp.Subscribe(respTopic, c.handleResponse); err != nil {
 		return fmt.Errorf("courier/rpc: subscribe to response topic failed: %w", err)
 	}
@@ -71,7 +71,7 @@ func (c *Client) Close() error {
 		return nil
 	}
 
-	respTopic := ResponseTopic(c.deviceID)
+	respTopic := ResponseTopic(c.clientID)
 	_ = c.tp.Unsubscribe(respTopic)
 
 	c.mu.Lock()
@@ -128,8 +128,8 @@ func (c *Client) Call(ctx context.Context, serviceName string, cmd uint32, paylo
 		}
 	})
 
-	// Encode and publish.
-	reqBytes := codec.EncodeRequest(cmd, payload)
+	// Encode and publish. ClientID is embedded in the request frame.
+	reqBytes := codec.EncodeRequest(cmd, c.clientID, payload)
 	reqTopic := RequestTopic(serviceName)
 
 	if pubErr := c.tp.Publish(reqTopic, reqBytes); pubErr != nil {
@@ -149,13 +149,12 @@ func (c *Client) Call(ctx context.Context, serviceName string, cmd uint32, paylo
 		case <-ctx.Done():
 			return nil, ErrCanceled
 		case <-time.After(interval):
-			// Retry: re-publish the same request.
 			_ = c.tp.Publish(reqTopic, reqBytes)
 			interval = time.Duration(float64(interval) * c.retryBackoff)
 		}
 	}
 
-	// Final wait for response (no more retries).
+	// Final wait for response.
 	select {
 	case resp := <-call.respChan:
 		return c.handleCallResult(resp)
@@ -198,7 +197,6 @@ func (c *Client) handleResponse(topic string, payload []byte) {
 	}
 }
 
-// newRequestID generates a random 16-byte request identifier.
 func newRequestID() ([16]byte, error) {
 	var id [16]byte
 	_, err := rand.Read(id[:])

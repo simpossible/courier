@@ -92,11 +92,12 @@ func (s *Server) makeMessageHandler() transport.MessageHandler {
 			return
 		}
 
-		ctx := &Context{}
+		ctx := &Context{
+			ClientID: frame.ClientID,
+		}
 
 		respPayload, dispatchErr := s.dispatcher.dispatch(frame.Cmd, ctx, frame.Payload)
 
-		// Build and send response even on error — the client is waiting.
 		var respBytes []byte
 		if dispatchErr != nil {
 			respBytes = errorToBytes(dispatchErr)
@@ -105,7 +106,7 @@ func (s *Server) makeMessageHandler() transport.MessageHandler {
 		}
 
 		respFrame := codec.EncodeResponse(ctx.RequestID, respBytes)
-		respTopic := ResponseTopic(ctx.DeviceID)
+		respTopic := ResponseTopic(ctx.ClientID)
 
 		if pubErr := s.tp.Publish(respTopic, respFrame); pubErr != nil {
 			log.Printf("[courier/rpc] failed to publish response to %s: %v", respTopic, pubErr)
@@ -113,9 +114,6 @@ func (s *Server) makeMessageHandler() transport.MessageHandler {
 	}
 }
 
-// errorToBytes serializes an error into a simple byte representation.
-// The protoc-gen-courier plugin generates adapters that handle proper
-// protobuf error encoding. For raw handler errors, we provide a basic fallback.
 func errorToBytes(err error) []byte {
 	if rpcErr, ok := err.(*Error); ok {
 		return []byte(fmt.Sprintf(`{"code":%d,"msg":"%s"}`, rpcErr.Code, rpcErr.Message))

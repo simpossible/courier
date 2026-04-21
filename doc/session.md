@@ -1,13 +1,23 @@
 # Session 管理
 
 Courier 使用服务端 Session 代替 JWT token，利用 MQTT 长连接的特性，
-登录后只需以 deviceId 为 key 查询 session，无需每个请求都携带 token。
+登录后以 ClientID 为 key 查询 session，无需每个请求都携带 token。
+
+## Broker 要求
+
+Session 的安全性依赖 **ClientID 不可伪造**。要求使用以下之一：
+
+- **EMQX** — 支持 `$share` 共享订阅 + 连接认证，推荐
+- **Mosquitto ≥ 2.0** — 支持 `$share`，配合 auth plugin 使用
+- **其他支持共享订阅的 MQTT 5.0 Broker**
+
+核心保证：MQTT 协议限制同一 ClientID 只能有一个活跃连接。配合 Broker 认证（username/password 或 TLS），ClientID 不可被冒充。
 
 ## 为什么不用 JWT
 
 | | JWT | Session |
 |---|---|---|
-| 每请求额外带宽 | ~350 字节 | 0（deviceId 已在请求中） |
+| 每请求额外带宽 | ~350 字节 | 0（ClientID 已在帧头中） |
 | 10w 活跃用户月带宽成本 | ≈ ¥2.6 万 | ≈ ¥0 |
 | 100w 活跃用户月带宽成本 | ≈ ¥26 万 | ≈ ¥500（Redis） |
 | 服务端状态 | 无 | 需要（内存或 Redis） |
@@ -44,7 +54,8 @@ func (h *LoginHandler) EmailLogin(ctx *rpc.Context, req *pb.EmailLoginReq) (*pb.
         return nil, rpc.NewError(1000006, "密码错误")
     }
 
-    h.sessionStore.Set(ctx.DeviceID, &rpc.Session{
+    // 用 ClientID 作为 session key
+    h.sessionStore.Set(ctx.ClientID, &rpc.Session{
         UserID: user.ID,
         Data:   map[string]string{"role": user.Role},
     })
@@ -87,7 +98,7 @@ func (h *ProfileHandler) GetProfile(ctx *rpc.Context, req *pb.GetProfileReq) (*p
 
 ```go
 func (h *UserHandler) Logout(ctx *rpc.Context, req *pb.LogoutReq) (*pb.LogoutResp, error) {
-    h.sessionStore.Delete(ctx.DeviceID)
+    h.sessionStore.Delete(ctx.ClientID)
     return &pb.LogoutResp{Code: 0, Msg: "OK"}, nil
 }
 ```
@@ -103,23 +114,20 @@ type Session struct {
 }
 ```
 
-## Context 中的 Session
-
-拦截器在每次请求时自动查 session 并注入 `ctx.Session`：
+## Context 中的字段
 
 ```go
-// Context 结构
 type Context struct {
     Cmd         uint32    // 当前命令号（用于白名单判断）
-    DeviceID    string    // 设备标识（session key）
-    Session     *Session  // 登录后自动注入
+    ClientID    string    // 客户端标识（来自帧头，session key）
+    Session     *Session  // 登录后由拦截器自动注入
     // ...
 }
 ```
 
 ## 多实例部署
 
-使用 `$share` 共享订阅时，同一个 deviceID 的请求可能分发到不同实例。
+使用 `$share` 共享订阅时，同一个 ClientID 的请求可能分发到不同实例。
 此时必须用 Redis 作为 session store：
 
 ```go
@@ -131,12 +139,19 @@ store := rpc.NewRedisSessionStore(rdb, rpc.WithRedisMaxAge(30*time.Minute))
 
 Redis 中的 session 自带 TTL，过期自动删除，不需要手动清理。
 
-## 安全性
+## 安全模型
 
-Session key 是 `deviceID`。安全性依赖 MQTT 连接层：
+```
+1. 客户端连接 Broker:
+   ClientID = "device-abc"
+   Broker 认证: username/password 或 TLS
 
-- MQTT 协议保证同一 ClientID 只有一个活跃连接
-- 结合 Broker 认证（username/password 或 TLS），只有合法设备能连接
-- payload 中的 deviceID 不可伪造 — 伪造者无法同时使用被伪造者的 ClientID
+2. 客户端发送请求:
+   帧头中 ClientID = "device-abc"（必须与连接 ClientID 一致）
 
-详细的安全方案参见 [架构设计](architecture.md) 中的连接层鉴权部分。
+3. 服务端验证:
+   - Broker 保证 ClientID 唯一（一个 ClientID 只有一个连接）
+   - Broker 认证保证只有合法设备能连接
+   - 所以帧头中的 ClientID 可信
+   - 用 ClientID 查 Session，确认已登录
+```

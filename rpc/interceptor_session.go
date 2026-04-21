@@ -5,7 +5,7 @@ import "time"
 // timeNow is a variable for testing purposes.
 var timeNow = time.Now
 
-// SessionInterceptor returns an interceptor that looks up the device's session
+// SessionInterceptor returns an interceptor that looks up the client's session
 // from the SessionStore and injects it into the Context.
 // Commands listed in publicCmds skip the session lookup.
 func SessionInterceptor(store SessionStore, publicCmds map[uint32]bool) Interceptor {
@@ -15,11 +15,11 @@ func SessionInterceptor(store SessionStore, publicCmds map[uint32]bool) Intercep
 				return next(ctx, raw)
 			}
 
-			if ctx.DeviceID == "" {
-				return nil, NewError(401, "missing device id")
+			if ctx.ClientID == "" {
+				return nil, NewError(401, "missing client id")
 			}
 
-			sess, err := store.Get(ctx.DeviceID)
+			sess, err := store.Get(ctx.ClientID)
 			if err != nil {
 				return nil, NewError(500, "session store error")
 			}
@@ -31,7 +31,7 @@ func SessionInterceptor(store SessionStore, publicCmds map[uint32]bool) Intercep
 
 			// Touch last active time.
 			sess.LastActive = timeNow()
-			_ = store.Set(ctx.DeviceID, sess)
+			_ = store.Set(ctx.ClientID, sess)
 
 			return next(ctx, raw)
 		}

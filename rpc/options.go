@@ -52,10 +52,11 @@ func WithClientTransport(tp transport.Transport) ClientOption {
 	}
 }
 
-// WithDeviceID sets the device identifier used for response topic routing.
-func WithDeviceID(id string) ClientOption {
+// WithClientID sets the client identifier. This must match the MQTT connection ClientID.
+// It is used for response topic routing and as the session key for authentication.
+func WithClientID(id string) ClientOption {
 	return func(c *Client) {
-		c.deviceID = id
+		c.clientID = id
 	}
 }
 

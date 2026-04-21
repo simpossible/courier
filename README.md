@@ -144,7 +144,7 @@ func main() {
 
     client := rpc.NewClient(
         rpc.WithClientTransport(tp),
-        rpc.WithDeviceID("device-abc123"),
+        rpc.WithClientID("device-abc123"),
         rpc.WithTimeout(10 * time.Second),
         rpc.WithRetry(3, 1*time.Second, 1.5),
     )
@@ -200,6 +200,7 @@ srv.Register(courier.ServiceInfo{
 - **核心不绑定 Protobuf** — `HandlerFunc` 处理 `[]byte`，序列化在适配层
 - **无全局状态** — Server / Client 都是实例，可创建多个
 - **QoS 0 + 应用层重试** — 传输层不做消息重放，重试策略由调用方控制
+- **ClientID 即身份** — 请求帧携带 ClientID，Broker 保证唯一，session 安全可靠（需 EMQX 或支持共享订阅的 Broker）
 - **协议简洁** — 固定 header + payload，无复杂帧协商
 
 ## License
