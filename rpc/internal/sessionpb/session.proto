@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package sessionpb;
+
+option go_package = "github.com/simpossible/courier/rpc/internal/sessionpb";
+
+// sessionData is the protobuf representation of a Session for serialization.
+message sessionData {
+  string user_id = 1;
+  map<string, string> data = 2;
+  int64 created_at = 3;   // Unix nanoseconds
+  int64 last_active = 4;  // Unix nanoseconds
+}

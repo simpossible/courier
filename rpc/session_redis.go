@@ -2,18 +2,19 @@ package rpc
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/simpossible/courier/rpc/internal/sessionpb"
+	"google.golang.org/protobuf/proto"
 )
 
 // RedisSessionStore implements SessionStore using Redis for multi-instance deployments.
-// All sessions have a TTL based on maxAge and are automatically expired by Redis.
+// Sessions are serialized with protobuf for high performance.
 type RedisSessionStore struct {
 	client *redis.Client
-	prefix string // key prefix, e.g. "courier:session:"
+	prefix string
 	maxAge time.Duration
 }
 
@@ -28,7 +29,6 @@ func WithRedisPrefix(prefix string) RedisSessionStoreOption {
 }
 
 // WithRedisMaxAge sets the session TTL. Default: 30 minutes.
-// Sessions are automatically expired by Redis TTL.
 func WithRedisMaxAge(d time.Duration) RedisSessionStoreOption {
 	return func(r *RedisSessionStore) {
 		r.maxAge = d
@@ -48,12 +48,12 @@ func NewRedisSessionStore(client *redis.Client, opts ...RedisSessionStoreOption)
 	return r
 }
 
-func (r *RedisSessionStore) key(deviceID string) string {
-	return r.prefix + deviceID
+func (r *RedisSessionStore) key(clientID string) string {
+	return r.prefix + clientID
 }
 
-func (r *RedisSessionStore) Get(deviceID string) (*Session, error) {
-	data, err := r.client.Get(context.Background(), r.key(deviceID)).Bytes()
+func (r *RedisSessionStore) Get(clientID string) (*Session, error) {
+	data, err := r.client.Get(context.Background(), r.key(clientID)).Bytes()
 	if err == redis.Nil {
 		return nil, nil
 	}
@@ -61,28 +61,38 @@ func (r *RedisSessionStore) Get(deviceID string) (*Session, error) {
 		return nil, fmt.Errorf("courier/rpc: redis get session: %w", err)
 	}
 
-	var sess Session
-	if err := json.Unmarshal(data, &sess); err != nil {
-		return nil, fmt.Errorf("courier/rpc: redis unmarshal session: %w", err)
+	pb := &sessionpb.SessionData{}
+	if err := proto.Unmarshal(data, pb); err != nil {
+		return nil, fmt.Errorf("courier/rpc: proto unmarshal session: %w", err)
 	}
-	return &sess, nil
+
+	return &Session{
+		UserID:     pb.UserId,
+		Data:       pb.Data,
+		CreatedAt:  time.Unix(0, pb.CreatedAt),
+		LastActive: time.Unix(0, pb.LastActive),
+	}, nil
 }
 
-func (r *RedisSessionStore) Set(deviceID string, sess *Session) error {
+func (r *RedisSessionStore) Set(clientID string, sess *Session) error {
 	sess.LastActive = time.Now()
-	data, err := json.Marshal(sess)
-	if err != nil {
-		return fmt.Errorf("courier/rpc: redis marshal session: %w", err)
+	pb := &sessionpb.SessionData{
+		UserId:     sess.UserID,
+		Data:       sess.Data,
+		CreatedAt:  sess.CreatedAt.UnixNano(),
+		LastActive: sess.LastActive.UnixNano(),
 	}
-	return r.client.Set(context.Background(), r.key(deviceID), data, r.maxAge).Err()
+	data, err := proto.Marshal(pb)
+	if err != nil {
+		return fmt.Errorf("courier/rpc: proto marshal session: %w", err)
+	}
+	return r.client.Set(context.Background(), r.key(clientID), data, r.maxAge).Err()
 }
 
-func (r *RedisSessionStore) Delete(deviceID string) error {
-	return r.client.Del(context.Background(), r.key(deviceID)).Err()
+func (r *RedisSessionStore) Delete(clientID string) error {
+	return r.client.Del(context.Background(), r.key(clientID)).Err()
 }
 
 func (r *RedisSessionStore) CleanExpired(maxAge time.Duration) error {
-	// Redis handles TTL-based expiration automatically.
-	// This is a no-op for RedisSessionStore.
 	return nil
 }
