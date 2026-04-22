@@ -192,7 +192,6 @@ srv.Register(courier.ServiceInfo{
 | [Session 管理](doc/session.md) | 服务端 Session、内存/Redis 存储、带宽对比 |
 | [共享订阅](doc/shared-subscription.md) | `$share` 机制、负载均衡、水平扩展 |
 | [Protoc 插件](doc/codegen.md) | 安装、使用、生成代码结构 |
-| [迁移指南](doc/migration.md) | 从旧版 Cipher 项目迁移 |
 
 ## 设计哲学
 
@@ -200,7 +199,6 @@ srv.Register(courier.ServiceInfo{
 - **核心不绑定 Protobuf** — `HandlerFunc` 处理 `[]byte`，序列化在适配层
 - **无全局状态** — Server / Client 都是实例，可创建多个
 - **QoS 0 + 应用层重试** — 传输层不做消息重放，重试策略由调用方控制
-- **ClientID 即身份** — 请求帧携带 ClientID，Broker 保证唯一，session 安全可靠（需 EMQX 或支持共享订阅的 Broker）
 - **协议简洁** — 固定 header + payload，无复杂帧协商
 
 ## License
