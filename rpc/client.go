@@ -55,6 +55,11 @@ func (c *Client) Connect() error {
 		return fmt.Errorf("courier/rpc: client has no client ID")
 	}
 
+	// Connect transport first.
+	if err := c.tp.Connect(); err != nil {
+		return fmt.Errorf("courier/rpc: transport connect failed: %w", err)
+	}
+
 	respTopic := ResponseTopic(c.clientID)
 	if err := c.tp.Subscribe(respTopic, c.handleResponse); err != nil {
 		return fmt.Errorf("courier/rpc: subscribe to response topic failed: %w", err)
@@ -123,7 +128,7 @@ func (c *Client) Call(ctx context.Context, serviceName string, cmd uint32, paylo
 	})
 
 	// ClientID is NOT in the frame — the broker injects it via message properties.
-	reqBytes := codec.EncodeRequest(cmd, payload)
+	reqBytes := codec.EncodeRequest(cmd, requestID, payload)
 	reqTopic := RequestTopic(serviceName)
 
 	if pubErr := c.tp.Publish(reqTopic, reqBytes); pubErr != nil {

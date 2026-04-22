@@ -4,21 +4,23 @@ import "encoding/binary"
 
 // RequestFrame represents a decoded RPC request on the wire.
 type RequestFrame struct {
-	Length  uint32
-	Version uint16
-	Cmd     uint32
-	Payload []byte
+	Length    uint32
+	Version   uint16
+	Cmd       uint32
+	RequestID [16]byte
+	Payload   []byte
 }
 
-// EncodeRequest serializes cmd and payload into the wire format:
+// EncodeRequest serializes cmd, requestID and payload into the wire format:
 //
-//	[4B length][2B version][4B cmd][...payload]
-func EncodeRequest(cmd uint32, payload []byte) []byte {
+//	[4B length][2B version][4B cmd][16B requestID][...payload]
+func EncodeRequest(cmd uint32, requestID [16]byte, payload []byte) []byte {
 	length := uint32(RequestHeaderLen + len(payload))
 	b := make([]byte, length)
 	binary.BigEndian.PutUint32(b[0:4], length)
 	binary.BigEndian.PutUint16(b[4:6], ProtocolVersion)
 	binary.BigEndian.PutUint32(b[6:10], cmd)
+	copy(b[10:26], requestID[:])
 	copy(b[RequestHeaderLen:], payload)
 	return b
 }
@@ -42,6 +44,7 @@ func DecodeRequest(data []byte) (*RequestFrame, error) {
 		Version: binary.BigEndian.Uint16(data[4:6]),
 		Cmd:     binary.BigEndian.Uint32(data[6:10]),
 	}
+	copy(frame.RequestID[:], data[10:26])
 
 	if length > uint32(RequestHeaderLen) {
 		frame.Payload = make([]byte, length-uint32(RequestHeaderLen))

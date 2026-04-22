@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -21,6 +20,20 @@ func WithBrokers(brokers ...string) MQTTTransportOption {
 func WithClientID(id string) MQTTTransportOption {
 	return func(t *MQTTTransport) {
 		t.clientID = id
+	}
+}
+
+// WithUsername sets the MQTT username for authentication.
+func WithUsername(username string) MQTTTransportOption {
+	return func(t *MQTTTransport) {
+		t.username = username
+	}
+}
+
+// WithPassword sets the MQTT password for authentication.
+func WithPassword(password string) MQTTTransportOption {
+	return func(t *MQTTTransport) {
+		t.password = password
 	}
 }
 
@@ -45,24 +58,17 @@ func WithKeepAlive(d time.Duration) MQTTTransportOption {
 	}
 }
 
-// WithPingTimeout sets the timeout for MQTT ping responses. Default: 30s.
-func WithPingTimeout(d time.Duration) MQTTTransportOption {
-	return func(t *MQTTTransport) {
-		t.pingTimeout = d
-	}
-}
-
-// WithMaxReconnectInterval sets the maximum interval between reconnection attempts. Default: 1min.
-func WithMaxReconnectInterval(d time.Duration) MQTTTransportOption {
-	return func(t *MQTTTransport) {
-		t.maxReconnectInterval = d
-	}
-}
-
 // WithCleanSession sets the MQTT clean session flag. Default: true.
 func WithCleanSession(clean bool) MQTTTransportOption {
 	return func(t *MQTTTransport) {
 		t.cleanSession = clean
+	}
+}
+
+// WithDefaultQoS sets the QoS level for publish and subscribe operations. Default: 0.
+func WithDefaultQoS(qos byte) MQTTTransportOption {
+	return func(t *MQTTTransport) {
+		t.defaultQoS = qos
 	}
 }
 
@@ -79,18 +85,4 @@ func WithOnConnectionLost(fn func(err error)) MQTTTransportOption {
 	return func(t *MQTTTransport) {
 		t.onConnectionLost = fn
 	}
-}
-
-// WithDefaultQoS sets the QoS level for publish and subscribe operations. Default: 0.
-func WithDefaultQoS(qos byte) MQTTTransportOption {
-	return func(t *MQTTTransport) {
-		t.defaultQoS = qos
-	}
-}
-
-func resolvedClientID(id string) string {
-	if id != "" {
-		return id
-	}
-	return fmt.Sprintf("courier_%d", time.Now().UnixNano())
 }

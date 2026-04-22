@@ -55,6 +55,11 @@ func (s *Server) Start() error {
 		return fmt.Errorf("courier/rpc: server has no service name")
 	}
 
+	// Connect transport first.
+	if err := s.tp.Connect(); err != nil {
+		return fmt.Errorf("courier/rpc: transport connect failed: %w", err)
+	}
+
 	topic := s.requestTopic()
 	respHandler := s.makeMessageHandler()
 
@@ -98,7 +103,8 @@ func (s *Server) makeMessageHandler() transport.MessageHandler {
 		}
 
 		ctx := &Context{
-			ClientID: clientID,
+			ClientID:  clientID,
+			RequestID: frame.RequestID,
 		}
 
 		respPayload, dispatchErr := s.dispatcher.dispatch(frame.Cmd, ctx, frame.Payload)

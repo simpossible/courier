@@ -1,33 +1,36 @@
 package transport
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"sync"
 	"time"
 
-	pahomqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/paho"
+	"github.com/eclipse/paho.golang/paho/session/state"
 )
 
-// MQTTTransport implements Transport using the paho MQTT client library.
-//
-// It handles automatic reconnection and resubscription of all topics
-// when the connection is restored. For MQTT 5.0 brokers (e.g. EMQX),
-// it extracts publisher metadata from message properties.
+// MQTTTransport implements Transport using the paho v2 MQTT client library.
+// It supports MQTT 5.0 with full access to publish properties including user properties.
 type MQTTTransport struct {
 	brokers              []string
 	clientID             string
+	username             string
+	password             string
 	autoReconnect        bool
 	connectRetry         bool
 	keepAlive            time.Duration
-	pingTimeout          time.Duration
-	maxReconnectInterval time.Duration
 	cleanSession         bool
 	defaultQoS           byte
 	onConnect            func()
 	onConnectionLost     func(err error)
 
-	client        pahomqtt.Client
+	cm         *autopaho.ConnectionManager // nil before Connect
+	cancelFunc context.CancelFunc
+
 	mu            sync.RWMutex
 	subs          map[string]MessageHandler
 	globalHandler func(topic string, payload []byte, props MessageProperties)
@@ -36,14 +39,12 @@ type MQTTTransport struct {
 // NewMQTTTransport creates a new MQTT transport with the given options.
 func NewMQTTTransport(opts ...MQTTTransportOption) *MQTTTransport {
 	t := &MQTTTransport{
-		autoReconnect:        true,
-		connectRetry:         true,
-		keepAlive:            60 * time.Second,
-		pingTimeout:          30 * time.Second,
-		maxReconnectInterval: 1 * time.Minute,
-		cleanSession:         true,
-		defaultQoS:           0,
-		subs:                 make(map[string]MessageHandler),
+		autoReconnect: true,
+		connectRetry:  true,
+		keepAlive:     60 * time.Second,
+		cleanSession:  true,
+		defaultQoS:    0,
+		subs:          make(map[string]MessageHandler),
 	}
 	for _, opt := range opts {
 		opt(t)
@@ -53,50 +54,92 @@ func NewMQTTTransport(opts ...MQTTTransportOption) *MQTTTransport {
 
 // Connect establishes a connection to the MQTT broker.
 func (t *MQTTTransport) Connect() error {
-	opts := pahomqtt.NewClientOptions()
-
-	for _, broker := range t.brokers {
-		opts.AddBroker(broker)
+	if len(t.brokers) == 0 {
+		return fmt.Errorf("courier/transport: no brokers configured")
 	}
 
-	opts.SetClientID(resolvedClientID(t.clientID))
-	opts.SetAutoReconnect(t.autoReconnect)
-	opts.SetConnectRetry(t.connectRetry)
-	opts.SetKeepAlive(t.keepAlive)
-	opts.SetPingTimeout(t.pingTimeout)
-	opts.SetMaxReconnectInterval(t.maxReconnectInterval)
-	opts.SetCleanSession(t.cleanSession)
-
-	opts.SetConnectionLostHandler(func(_ pahomqtt.Client, err error) {
-		log.Printf("[courier/transport] connection lost: %v", err)
-		if t.onConnectionLost != nil {
-			t.onConnectionLost(err)
+	serverUrls := make([]*url.URL, 0, len(t.brokers))
+	for _, b := range t.brokers {
+		u, err := url.Parse(b)
+		if err != nil {
+			return fmt.Errorf("courier/transport: invalid broker url %q: %w", b, err)
 		}
-	})
+		serverUrls = append(serverUrls, u)
+	}
 
-	opts.SetOnConnectHandler(func(_ pahomqtt.Client) {
-		log.Println("[courier/transport] connected, resubscribing...")
-		t.resubscribeAll()
+	clientID := t.clientID
+	if clientID == "" {
+		clientID = fmt.Sprintf("courier_%d", time.Now().UnixNano())
+	}
 
-		if t.onConnect != nil {
-			t.onConnect()
-		}
-	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.cancelFunc = cancel
 
-	opts.SetDefaultPublishHandler(func(_ pahomqtt.Client, msg pahomqtt.Message) {
-		t.mu.RLock()
-		handler := t.globalHandler
-		t.mu.RUnlock()
+	cfg := autopaho.ClientConfig{
+		ServerUrls:                    serverUrls,
+		KeepAlive:                     uint16(t.keepAlive.Seconds()),
+		CleanStartOnInitialConnection: t.cleanSession,
+		SessionExpiryInterval:         0,
+		ReconnectBackoff:              func(attempt int) time.Duration {
+			if attempt < 5 {
+				return time.Duration(attempt+1) * 2 * time.Second
+			}
+			return 30 * time.Second
+		},
+		ConnectTimeout:                10 * time.Second,
+		ConnectUsername:               t.username,
+		ConnectPassword:               []byte(t.password),
+		ClientConfig: paho.ClientConfig{
+			ClientID: clientID,
+			Session:  state.NewInMemory(),
+			OnClientError: func(err error) {
+				log.Printf("[courier/transport] client error: %v", err)
+			},
+			OnServerDisconnect: func(d *paho.Disconnect) {
+				log.Printf("[courier/transport] server disconnect: reason=%d", d.ReasonCode)
+			},
+		},
+		OnConnectionUp: func(cm *autopaho.ConnectionManager, connack *paho.Connack) {
+			log.Println("[courier/transport] connected, resubscribing...")
+			t.mu.Lock()
+			t.cm = cm
+			t.rebuildGlobalHandler()
+			t.mu.Unlock()
+			t.resubscribeAll(cm)
+			if t.onConnect != nil {
+				t.onConnect()
+			}
+		},
+		OnConnectError: func(err error) {
+			log.Printf("[courier/transport] connect error: %v", err)
+		},
+	}
 
-		if handler != nil {
-			props := extractProperties(msg)
-			handler(msg.Topic(), msg.Payload(), props)
-		}
-	})
+	// Register message handler via OnPublishReceived.
+	cfg.OnPublishReceived = []func(paho.PublishReceived) (bool, error){
+		func(pr paho.PublishReceived) (bool, error) {
+			t.mu.RLock()
+			handler := t.globalHandler
+			t.mu.RUnlock()
 
-	t.client = pahomqtt.NewClient(opts)
-	if token := t.client.Connect(); token.Wait() && token.Error() != nil {
-		return fmt.Errorf("courier/transport: connect failed: %w", token.Error())
+			if handler != nil {
+				props := extractPublishProperties(pr.Packet)
+				handler(pr.Packet.Topic, pr.Packet.Payload, props)
+			}
+			return true, nil
+		},
+	}
+
+	cm, err := autopaho.NewConnection(ctx, cfg)
+	if err != nil {
+		cancel()
+		return fmt.Errorf("courier/transport: connect failed: %w", err)
+	}
+
+	// Wait for initial connection.
+	if err := cm.AwaitConnection(ctx); err != nil {
+		cancel()
+		return fmt.Errorf("courier/transport: await connection failed: %w", err)
 	}
 
 	return nil
@@ -104,8 +147,8 @@ func (t *MQTTTransport) Connect() error {
 
 // Close disconnects from the MQTT broker.
 func (t *MQTTTransport) Close() error {
-	if t.client != nil && t.client.IsConnected() {
-		t.client.Disconnect(250)
+	if t.cancelFunc != nil {
+		t.cancelFunc()
 	}
 	return nil
 }
@@ -115,11 +158,16 @@ func (t *MQTTTransport) Subscribe(topic string, handler MessageHandler) error {
 	t.mu.Lock()
 	t.subs[topic] = handler
 	t.rebuildGlobalHandler()
+	cm := t.cm
 	t.mu.Unlock()
 
-	if t.client != nil && t.client.IsConnected() {
-		if token := t.client.Subscribe(topic, t.defaultQoS, nil); token.Wait() && token.Error() != nil {
-			return fmt.Errorf("courier/transport: subscribe to %s failed: %w", topic, token.Error())
+	if cm != nil {
+		if _, err := cm.Subscribe(context.Background(), &paho.Subscribe{
+			Subscriptions: []paho.SubscribeOptions{
+				{Topic: topic, QoS: t.defaultQoS},
+			},
+		}); err != nil {
+			return fmt.Errorf("courier/transport: subscribe to %s failed: %w", topic, err)
 		}
 	}
 	return nil
@@ -130,11 +178,14 @@ func (t *MQTTTransport) Unsubscribe(topic string) error {
 	t.mu.Lock()
 	delete(t.subs, topic)
 	t.rebuildGlobalHandler()
+	cm := t.cm
 	t.mu.Unlock()
 
-	if t.client != nil && t.client.IsConnected() {
-		if token := t.client.Unsubscribe(topic); token.Wait() && token.Error() != nil {
-			return fmt.Errorf("courier/transport: unsubscribe from %s failed: %w", topic, token.Error())
+	if cm != nil {
+		if _, err := cm.Unsubscribe(context.Background(), &paho.Unsubscribe{
+			Topics: []string{topic},
+		}); err != nil {
+			return fmt.Errorf("courier/transport: unsubscribe from %s failed: %w", topic, err)
 		}
 	}
 	return nil
@@ -142,11 +193,21 @@ func (t *MQTTTransport) Unsubscribe(topic string) error {
 
 // Publish sends a message to the given topic.
 func (t *MQTTTransport) Publish(topic string, payload []byte) error {
-	if t.client == nil || !t.client.IsConnected() {
+	t.mu.RLock()
+	cm := t.cm
+	t.mu.RUnlock()
+
+	if cm == nil {
 		return fmt.Errorf("courier/transport: not connected")
 	}
-	if token := t.client.Publish(topic, t.defaultQoS, false, payload); token.Wait() && token.Error() != nil {
-		return fmt.Errorf("courier/transport: publish to %s failed: %w", topic, token.Error())
+
+	_, err := cm.Publish(context.Background(), &paho.Publish{
+		QoS:     t.defaultQoS,
+		Topic:   topic,
+		Payload: payload,
+	})
+	if err != nil {
+		return fmt.Errorf("courier/transport: publish to %s failed: %w", topic, err)
 	}
 	return nil
 }
@@ -163,7 +224,7 @@ func (t *MQTTTransport) rebuildGlobalHandler() {
 	}
 }
 
-func (t *MQTTTransport) resubscribeAll() {
+func (t *MQTTTransport) resubscribeAll(cm *autopaho.ConnectionManager) {
 	t.mu.RLock()
 	topics := make([]string, 0, len(t.subs))
 	for topic := range t.subs {
@@ -171,24 +232,30 @@ func (t *MQTTTransport) resubscribeAll() {
 	}
 	t.mu.RUnlock()
 
+	if len(topics) == 0 {
+		return
+	}
+
+	subs := make([]paho.SubscribeOptions, 0, len(topics))
 	for _, topic := range topics {
-		if token := t.client.Subscribe(topic, t.defaultQoS, nil); token.Wait() && token.Error() != nil {
-			log.Printf("[courier/transport] resubscribe to %s failed: %v", topic, token.Error())
-		} else {
-			log.Printf("[courier/transport] resubscribed to %s", topic)
-		}
+		subs = append(subs, paho.SubscribeOptions{Topic: topic, QoS: t.defaultQoS})
+	}
+
+	if _, err := cm.Subscribe(context.Background(), &paho.Subscribe{Subscriptions: subs}); err != nil {
+		log.Printf("[courier/transport] resubscribe failed: %v", err)
+	} else {
+		log.Printf("[courier/transport] resubscribed to %d topics", len(topics))
 	}
 }
 
-// extractProperties pulls publisher and user metadata from MQTT message properties.
-// The current paho v1 library does not expose MQTT 5.0 properties on the Message interface.
-// Properties will be populated when upgrading to paho v2 or using EMQX's rule engine
-// to inject publisher metadata into the payload.
-//
-// EMQX configuration options to pass client_id:
-//   - Rule engine: rewrite payload to include client_id
-//   - Webhook plugin: inject client_id as a prefix in the payload
-//   - Upgrade to paho.mqtt.golang v2 which supports MQTT 5.0 properties
-func extractProperties(msg pahomqtt.Message) MessageProperties {
-	return make(MessageProperties)
+// extractPublishProperties extracts MQTT 5.0 user properties from a paho Publish packet.
+// EMQX injects the publisher's clientID and other metadata here.
+func extractPublishProperties(pub *paho.Publish) MessageProperties {
+	props := make(MessageProperties)
+	if pub.Properties != nil {
+		for _, up := range pub.Properties.User {
+			props[up.Key] = up.Value
+		}
+	}
+	return props
 }
