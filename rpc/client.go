@@ -187,8 +187,15 @@ func (c *Client) handleResponse(topic string, payload []byte, props transport.Me
 		return
 	}
 
+	var result []byte
+	if frame.Code != codec.ResponseCodeOK {
+		result = nil
+	} else {
+		result = frame.Payload
+	}
+
 	select {
-	case call.respChan <- frame.Payload:
+	case call.respChan <- result:
 	default:
 		log.Printf("[courier/rpc] response channel full for request %x", frame.RequestID)
 	}

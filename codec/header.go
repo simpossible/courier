@@ -15,6 +15,6 @@ const (
 	ExtensionsDataOffset = 28
 
 	// ResponseHeaderLen is the byte length of a response frame header:
-	// 4 (length) + 16 (requestID).
-	ResponseHeaderLen = 20
+	// 4 (length) + 16 (requestID) + 2 (code).
+	ResponseHeaderLen = 22
 )

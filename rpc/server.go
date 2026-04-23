@@ -110,13 +110,15 @@ func (s *Server) makeMessageHandler() transport.MessageHandler {
 		respPayload, dispatchErr := s.dispatcher.dispatch(frame.Cmd, ctx, frame.Payload)
 
 		var respBytes []byte
+		var respCode uint16
 		if dispatchErr != nil {
-			respBytes = errorToBytes(dispatchErr)
+			respCode = errorCode(dispatchErr)
+			respBytes = []byte(dispatchErr.Error())
 		} else {
 			respBytes = respPayload
 		}
 
-		respFrame := codec.EncodeResponse(ctx.RequestID, respBytes)
+		respFrame := codec.EncodeResponse(ctx.RequestID, respCode, respBytes)
 		respTopic := ResponseTopic(ctx.ClientID)
 
 		if pubErr := s.tp.Publish(respTopic, respFrame); pubErr != nil {
@@ -125,9 +127,10 @@ func (s *Server) makeMessageHandler() transport.MessageHandler {
 	}
 }
 
-func errorToBytes(err error) []byte {
+// errorCode extracts a uint16 code from an error.
+func errorCode(err error) uint16 {
 	if rpcErr, ok := err.(*Error); ok {
-		return []byte(fmt.Sprintf(`{"code":%d,"msg":"%s"}`, rpcErr.Code, rpcErr.Message))
+		return uint16(rpcErr.Code)
 	}
-	return []byte(fmt.Sprintf(`{"code":-2,"msg":"%s"}`, err.Error()))
+	return 2
 }
