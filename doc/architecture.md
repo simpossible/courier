@@ -36,16 +36,27 @@ Courier 分为三层，每层职责单一、可独立替换：
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                          Cmd (4B, BE)                         |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                         RequestID (16B)                       |
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|   ExtensionsLen (2B, BE)      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                    Extensions (...B, 可选)                     |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                         Payload (...B)                        |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
-- **Length** (uint32, BigEndian): 整帧长度 = 10 + len(Payload)
+- **Length** (uint32, BigEndian): 整帧长度 = 28 + len(Extensions) + len(Payload)
 - **Version** (uint16, BigEndian): 协议版本，当前为 1
 - **Cmd** (uint32, BigEndian): 命令号，用于路由到对应的处理函数
+- **RequestID** (16B): 来自请求的唯一标识，用于匹配请求和响应
+- **ExtensionsLen** (uint16, BigEndian): 扩展段字节数，0 表示无扩展
+- **Extensions**: 扩展数据，可用于 token、签名、时间戳等（可用 Protobuf 序列化）
 - **Payload**: Protobuf 序列化的请求体
 
 > **ClientID 不在帧中传输。** 服务端通过 Broker（EMQX）注入的消息属性获取发布者的 ClientID，用于 session 查询和响应路由。
+> **Extensions 设计类似 HTTP Header**，固定 header（Length ~ ExtensionsLen）用于快速路由分发，Extensions 段延迟到需要鉴权时解析。
 
 ### Response Frame
 

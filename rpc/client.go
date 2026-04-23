@@ -128,7 +128,7 @@ func (c *Client) Call(ctx context.Context, serviceName string, cmd uint32, paylo
 	})
 
 	// ClientID is NOT in the frame — the broker injects it via message properties.
-	reqBytes := codec.EncodeRequest(cmd, requestID, payload)
+	reqBytes := codec.EncodeRequest(cmd, requestID, nil, payload)
 	reqTopic := RequestTopic(serviceName)
 
 	if pubErr := c.tp.Publish(reqTopic, reqBytes); pubErr != nil {
