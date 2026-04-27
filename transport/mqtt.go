@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,8 +71,9 @@ func (t *MQTTTransport) Connect() error {
 
 	clientID := t.clientID
 	if clientID == "" {
-		clientID = fmt.Sprintf("courier_%d", time.Now().UnixNano())
+		clientID = "courier"
 	}
+	clientID = fmt.Sprintf("%s_%d_%04x", clientID, time.Now().Unix(), rand.Intn(0xFFFF))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancelFunc = cancel
@@ -220,6 +223,22 @@ func (t *MQTTTransport) rebuildGlobalHandler() {
 	t.globalHandler = func(topic string, payload []byte, props MessageProperties) {
 		if h, ok := snapshot[topic]; ok {
 			h(topic, payload, props)
+			return
+		}
+		// Shared subscription: broker delivers on the actual topic (e.g. "mrpc/request/Svc")
+		// but the map key is "$share/Group/mrpc/request/Svc". Try stripping the prefix.
+		if strings.HasPrefix(topic, "$share/") {
+			return
+		}
+		for subTopic, h := range snapshot {
+			if strings.HasPrefix(subTopic, "$share/") {
+				// $share/{group}/{actualTopic}
+				parts := strings.SplitN(subTopic, "/", 3)
+				if len(parts) == 3 && parts[2] == topic {
+					h(topic, payload, props)
+					return
+				}
+			}
 		}
 	}
 }
