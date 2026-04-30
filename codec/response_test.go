@@ -33,7 +33,7 @@ func TestEncodeDecodeResponse(t *testing.T) {
 func TestEncodeDecodeResponseError(t *testing.T) {
 	var requestID [16]byte
 	copy(requestID[:], "error-response!!")
-	code := uint16(401)
+	code := uint32(401)
 	payload := []byte("unauthorized")
 
 	encoded := EncodeResponse(requestID, code, payload)
@@ -79,8 +79,8 @@ func TestDecodeResponseTooShort(t *testing.T) {
 }
 
 func TestDecodeResponseInvalidLength(t *testing.T) {
-	// Length = 10, less than ResponseHeaderLen(22)
-	data := make([]byte, 22)
+	// Length = 10, less than ResponseHeaderLen(24)
+	data := make([]byte, 24)
 	data[0] = 0x00
 	data[1] = 0x00
 	data[2] = 0x00
@@ -99,12 +99,12 @@ func TestEncodeResponseByteLayout(t *testing.T) {
 	payload := []byte{0xCC, 0xDD}
 	encoded := EncodeResponse(requestID, ResponseCodeOK, payload)
 
-	// [4B length=24][16B requestID][2B code=0][2B payload]
-	if len(encoded) != 24 {
-		t.Fatalf("encoded length: got %d, want 24", len(encoded))
+	// [4B length=26][16B requestID][4B code=0][2B payload]
+	if len(encoded) != 26 {
+		t.Fatalf("encoded length: got %d, want 26", len(encoded))
 	}
-	// Length: 0x00000018 = 24
-	if encoded[0] != 0x00 || encoded[1] != 0x00 || encoded[2] != 0x00 || encoded[3] != 0x18 {
+	// Length: 0x0000001A = 26
+	if encoded[0] != 0x00 || encoded[1] != 0x00 || encoded[2] != 0x00 || encoded[3] != 0x1A {
 		t.Errorf("length bytes: got %v", encoded[0:4])
 	}
 	// RequestID bytes 4..20
@@ -113,13 +113,13 @@ func TestEncodeResponseByteLayout(t *testing.T) {
 			t.Errorf("requestID[%d]: got %d, want %d", i, encoded[4+i], i+1)
 		}
 	}
-	// Code: 0x0000
-	if encoded[20] != 0x00 || encoded[21] != 0x00 {
-		t.Errorf("code bytes: got %v", encoded[20:22])
+	// Code: 0x00000000
+	if encoded[20] != 0x00 || encoded[21] != 0x00 || encoded[22] != 0x00 || encoded[23] != 0x00 {
+		t.Errorf("code bytes: got %v", encoded[20:24])
 	}
-	// Payload at offset 22
-	if !bytes.Equal(encoded[22:24], payload) {
-		t.Errorf("payload: got %v, want %v", encoded[22:24], payload)
+	// Payload at offset 24
+	if !bytes.Equal(encoded[24:26], payload) {
+		t.Errorf("payload: got %v, want %v", encoded[24:26], payload)
 	}
 }
 
@@ -143,7 +143,7 @@ func TestResponseRoundtrip(t *testing.T) {
 func TestResponseRoundtripWithError(t *testing.T) {
 	var id [16]byte
 	copy(id[:], "error-roundtrip!!")
-	code := uint16(500)
+	code := uint32(500)
 	original := []byte("internal server error")
 
 	encoded := EncodeResponse(id, code, original)

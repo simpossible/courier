@@ -110,7 +110,7 @@ func (s *Server) makeMessageHandler() transport.MessageHandler {
 		respPayload, dispatchErr := s.dispatcher.dispatch(frame.Cmd, ctx, frame.Payload)
 
 		var respBytes []byte
-		var respCode uint16
+		var respCode uint32
 		if dispatchErr != nil {
 			respCode = errorCode(dispatchErr)
 			respBytes = []byte(dispatchErr.Error())
@@ -127,10 +127,10 @@ func (s *Server) makeMessageHandler() transport.MessageHandler {
 	}
 }
 
-// errorCode extracts a uint16 code from an error.
-func errorCode(err error) uint16 {
+// errorCode extracts a uint32 code from an error.
+func errorCode(err error) uint32 {
 	if rpcErr, ok := err.(*Error); ok {
-		return uint16(rpcErr.Code)
+		return uint32(rpcErr.Code)
 	}
 	return 2
 }

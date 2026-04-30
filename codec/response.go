@@ -3,26 +3,26 @@ package codec
 import "encoding/binary"
 
 // ResponseCodeOK indicates a successful response.
-const ResponseCodeOK uint16 = 0
+const ResponseCodeOK uint32 = 0
 
 // ResponseFrame represents a decoded RPC response on the wire.
 type ResponseFrame struct {
 	Length    uint32
 	RequestID [16]byte
-	Code      uint16
+	Code      uint32
 	Payload   []byte
 }
 
 // EncodeResponse serializes requestID, code and payload into the wire format:
 //
-//	[4B length][16B requestID][2B code][...payload]
-func EncodeResponse(requestID [16]byte, code uint16, payload []byte) []byte {
+//	[4B length][16B requestID][4B code][...payload]
+func EncodeResponse(requestID [16]byte, code uint32, payload []byte) []byte {
 	length := uint32(ResponseHeaderLen + len(payload))
 	b := make([]byte, length)
 	binary.BigEndian.PutUint32(b[0:4], length)
 	copy(b[4:20], requestID[:])
-	binary.BigEndian.PutUint16(b[20:22], code)
-	copy(b[22:], payload)
+	binary.BigEndian.PutUint32(b[20:24], code)
+	copy(b[24:], payload)
 	return b
 }
 
@@ -42,7 +42,7 @@ func DecodeResponse(data []byte) (*ResponseFrame, error) {
 
 	frame := &ResponseFrame{
 		Length: length,
-		Code:   binary.BigEndian.Uint16(data[20:22]),
+		Code:   binary.BigEndian.Uint32(data[20:24]),
 	}
 	copy(frame.RequestID[:], data[4:20])
 
